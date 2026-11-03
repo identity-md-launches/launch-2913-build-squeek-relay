@@ -1,0 +1,7 @@
+# Path budget: this file <= 512 bytes; only generated dependencies/caches and
+# disposable validation scratch. dist/ is deliberately deliverable.
+node_modules/
+.vite/
+.cache/
+*.tsbuildinfo
+test/scratch/
