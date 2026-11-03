@@ -4,6 +4,7 @@ import { Modal } from "./components/Modal";
 import { WalletControl } from "./components/WalletControl";
 import { useLive } from "./lib/useLive";
 import { chooseHeat, formatTime, formatWork, type Heat } from "./lib/live";
+import { LIMO_URL, mirrorLinks, useLiveCid } from "./lib/gateway";
 import {
   entries,
   saveEntry,
@@ -13,8 +14,8 @@ import {
 } from "./lib/storage";
 import { squeak, unlockAudio } from "./lib/audio";
 import {
-  canScore,
   createGame,
+  meters,
   moveLane,
   score,
   step,
@@ -49,6 +50,7 @@ const hudOf = (g: ReturnType<typeof createGame>): Hud => ({
 
 export default function App() {
   const live = useLive();
+  const liveCid = useLiveCid();
   const [phase, setPhase] = useState<Phase>("title");
   const [nick, setNick] = useState(() =>
     stored("squeek-relay:nick", "Tiny Runner").slice(0, 18),
@@ -105,7 +107,9 @@ export default function App() {
         ? "HE’S SLEEPING"
         : live.mode === "stale"
           ? "SIGNAL STALE"
-          : "RECONNECTING";
+          : live.connected
+            ? "RECONNECTING"
+            : "CONNECTING";
   const statusHint =
     live.mode === "running"
       ? "The whole track is surging."
@@ -113,7 +117,9 @@ export default function App() {
         ? "Ice mode: save your energy."
         : live.mode === "stale"
           ? "Scoring paused until fresh data arrives."
-          : "Scoring paused. Retrying the live feeds…";
+          : live.connected
+            ? "Distance frozen. Retrying the live feeds…"
+            : "Reaching the wheel. Scoring starts with live data.";
 
   const finish = useCallback(() => {
     const current = latest.current;
@@ -129,6 +135,8 @@ export default function App() {
       combo: game.current.combo,
       at: Date.now(),
     };
+    // The end card and the frozen meter read the same number from the same state.
+    setHud(hudOf(game.current));
     setResult(entry);
     setSaved(saveEntry(entry));
     setBoard(entries());
@@ -377,7 +385,7 @@ export default function App() {
               <div className="live-state">
                 <span className={`live-badge ${!online ? "offline" : ""}`}>
                   <i />
-                  {online ? "LIVE" : "SYNC"}
+                  {online ? "LIVE" : live.connected ? "OFFLINE" : "SYNC"}
                 </span>
                 <span className="motor-state" role="status">
                   {status}
@@ -478,6 +486,21 @@ export default function App() {
                       90s quick heat
                     </label>
                   </div>
+                  <p className="mirror-note">
+                    Page slow to load?{" "}
+                    {mirrorLinks(liveCid).map((m, i) => (
+                      <span key={m.href}>
+                        {i > 0 && " · "}
+                        <a href={m.href} target="_blank" rel="noopener noreferrer">
+                          {m.label}
+                        </a>
+                      </span>
+                    ))}
+                    {" · "}
+                    <a href={LIMO_URL} target="_blank" rel="noopener noreferrer">
+                      eth.limo
+                    </a>
+                  </p>
                 </div>
               )}
 
@@ -486,11 +509,17 @@ export default function App() {
                   <div className="race-top">
                     <div className="race-score">
                       <span>Meters ridden</span>
-                      <strong data-testid="score">
-                        {hud.score.toLocaleString("en-US")}
+                      <strong data-testid="meter">
+                        {meters(hud.distance).toLocaleString("en-US")}
                         <small>m</small>
                       </strong>
-                      <span>with Squeektoshi</span>
+                      <span>
+                        Score{" "}
+                        <b data-testid="score">
+                          {hud.score.toLocaleString("en-US")}
+                        </b>{" "}
+                        pts
+                      </span>
                     </div>
                     <div className="heat-clock">
                       <span>{heat?.label}</span>
@@ -515,7 +544,9 @@ export default function App() {
                     <span className={hud.combo > 1 ? "combo-active" : ""}>
                       {hud.combo}× combo
                     </span>
-                    <span>{hud.distance.toFixed(0)} m distance</span>
+                    <span data-testid="distance">
+                      {meters(hud.distance).toLocaleString("en-US")} m distance
+                    </span>
                   </div>
                   <p
                     className={`race-feedback ${hud.feedback ? "show" : ""}`}
@@ -530,7 +561,11 @@ export default function App() {
                 <div className="pause-cover">
                   <Icon name="pause" size={32} />
                   <h2>Take a tiny breather.</h2>
-                  <p>The heat clock keeps running.</p>
+                  <p>
+                    Distance frozen at{" "}
+                    {meters(hud.distance).toLocaleString("en-US")} m. The heat
+                    clock keeps running.
+                  </p>
                   <button
                     className="primary"
                     onClick={() => {
@@ -554,15 +589,17 @@ export default function App() {
                     <Icon name="trophy" size={28} />
                     <h2>Little legs. Big relay.</h2>
                   </div>
-                  <strong className="finish-score">
-                    {result.score.toLocaleString("en-US")}
+                  <strong className="finish-score" data-testid="final-distance">
+                    {meters(result.distance).toLocaleString("en-US")}
                     <span>m</span>
                   </strong>
                   <p>meters ridden with Squeektoshi</p>
                   <div className="finish-detail">
-                    <span>{result.distance.toFixed(1)} m distance</span>
-                    <span>×</span>
                     <span>{result.combo}× final combo</span>
+                    <span>=</span>
+                    <span data-testid="final-score">
+                      {result.score.toLocaleString("en-US")} pts
+                    </span>
                   </div>
                   <p className="save-note" role="status">
                     {saved
@@ -577,7 +614,7 @@ export default function App() {
                     <button
                       className="secondary"
                       onClick={() => {
-                        const text = `I rode ${result.score.toLocaleString("en-US")} meters with Squeektoshi in Squeek Relay. One real hamster powers the whole race. ${location.href.split("#")[0]}`;
+                        const text = `I rode ${meters(result.distance).toLocaleString("en-US")} m with Squeektoshi in Squeek Relay and scored ${result.score.toLocaleString("en-US")} pts. One real hamster powers the whole race. ${location.href.split("#")[0]}`;
                         void navigator.clipboard
                           ?.writeText(text)
                           .then(() => setCopied(true))
@@ -676,8 +713,12 @@ export default function App() {
                 <h2 id="story-title">Ride his rhythm.</h2>
                 <span className="round-tag">
                   {live.economy
-                    ? `Round ${live.economy.round}`
-                    : "Finding the round…"}
+                    ? live.economyGap
+                      ? `Round ${live.economy.round} (last seen)`
+                      : `Round ${live.economy.round}`
+                    : live.economyGap
+                      ? "Round data catching up"
+                      : "Finding the round…"}
                 </span>
               </div>
               <p>
@@ -727,7 +768,7 @@ export default function App() {
               </div>
               <div className="board-subhead">
                 <span>{activeHeat.label}</span>
-                <span>Distance × combo</span>
+                <span>Meters × combo</span>
               </div>
               {boardRows.length ? (
                 <ol className="board-list">
@@ -742,7 +783,7 @@ export default function App() {
                       </span>
                       <strong>
                         {e.score.toLocaleString("en-US")}
-                        <small> m</small>
+                        <small> pts</small>
                       </strong>
                     </li>
                   ))}
@@ -761,7 +802,7 @@ export default function App() {
                   <span>
                     <i /> {nick} <small>on track</small>
                   </span>
-                  <b>{hud.score.toLocaleString("en-US")} m</b>
+                  <b>{hud.score.toLocaleString("en-US")} pts</b>
                 </div>
               )}
               {phase === "racing" &&
@@ -770,7 +811,7 @@ export default function App() {
                     <span>
                       {p.nick} <small>on track</small>
                     </span>
-                    <b>{Math.floor(p.score).toLocaleString("en-US")} m</b>
+                    <b>{Math.floor(p.score).toLocaleString("en-US")} pts</b>
                   </div>
                 ))}
               <p className="board-footnote">
@@ -814,8 +855,8 @@ export default function App() {
               sleeping hamsters reset your combo.
             </p>
             <p>
-              Your score is distance × your final combo: meters ridden with
-              Squeektoshi. A heat lasts until the current 10-minute round ends,
+              The big meter is the distance you have ridden with Squeektoshi.
+              Your score is that distance × your final combo, in points. A heat lasts until the current 10-minute round ends,
               or 90 seconds if its timing is unavailable. Choose “90s quick
               heat” for a shorter race.
             </p>
@@ -849,7 +890,9 @@ export default function App() {
               >
                 /v1/economy/state
               </a>{" "}
-              supplies the round and lifecycle. Both refresh every 2.5 seconds.{" "}
+              supplies the round and lifecycle. Both refresh every 2.5 seconds.
+              When the round indexer answers “unavailable”, the last real round
+              stays on screen marked “last seen” and the wheel stays live.{" "}
               <a
                 href="https://api.squeekchain.com/v1/core"
                 target="_blank"
@@ -862,8 +905,10 @@ export default function App() {
             <p>
               Wheel RPM is rpmMilli ÷ 1,000; game speed is RPM × 0.4 m/s, capped
               at 38 m/s before boost. Sleep or stale data ices the track. If
-              either live feed fails, scoring pauses until it reconnects. Work
-              units are measured totals, never simulated.
+              either live feed fails for one poll (each request gets 3 seconds,
+              then one retry), the badge reads RECONNECTING, scoring pauses and
+              the distance meter freezes; racing resumes from the next real
+              reading. Work units are measured totals, never simulated.
             </p>
             <p>
               Everyone shares the same real motor. This v1 leaderboard is saved

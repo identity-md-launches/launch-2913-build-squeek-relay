@@ -85,12 +85,14 @@ On phones the title wheel has a 61px radius; during a race it becomes a 43px bac
 | `src/components/Icon.tsx` | One currentColor SVG icon family plus the original hamster mark; decorative icons are hidden from assistive technology. |
 | `src/components/Modal.tsx` | Native `dialog`; modal focus containment, Escape, backdrop dismissal, close control, and focus return. |
 | `src/components/WalletControl.tsx` | Named provider discovery; mobile app links; Coinbase; per-row pending; recoverable connect/sign/switch failures; signed identity and Disconnect. |
-| `src/App.tsx`, `.live-bar` / `.track-notice` | Actual RPM/work and running, sleeping, stale, reconnect, or lifecycle-pause messages. Unknown values are dashes, never invented zero readings. |
+| `src/App.tsx`, `.live-bar` / `.track-notice` | Badge states: **LIVE** (fresh wheel reading), **SYNC / CONNECTING** (no reading yet this visit), **OFFLINE / RECONNECTING** (feed lost after a reading; notice reads “Distance frozen. Retrying the live feeds…” with a retry icon button). Motor line: HE’S RUNNING, HE’S SLEEPING, SIGNAL STALE. Unknown RPM is a dash; work units keep the last real total marked “last seen”. The round tag adds “(last seen)” while the round indexer reports unavailable. |
+| `src/App.tsx`, `.race-score` | Display-size **meters ridden** (`meters(distance)`, tabular numerals) with a small “Score N pts” line beneath. The `.combo-indicator` chip “N m distance” uses the same `meters()` value, so the two never differ. The pause cover repeats the frozen meter. |
+| `src/App.tsx`, `.mirror-note` | Title-screen line, `--text-xs`, muted, underlined links (4px vertical padding for touch): dweb.link and inbrowser.link for the live CID, plus eth.limo. |
 | `src/App.tsx`, `.nick-field` / `.play-form` | Visible nickname label, 18-character limit, inline empty-name error, one-tap Play with the stored default. |
 | `src/game/engine.ts` and `render.ts` | Three lanes, batons, combo, boost/friction, particles, illustrated runners and observatory. Animation follows game distance derived from live RPM. |
 | `src/App.tsx`, `.game-controls` | Native lane/boost buttons, numeric charge and semantic progressbar; disabled boost explains that recharge requires running. |
 | `src/App.tsx`, `.leaderboard` | Explicit device scope; actionable empty state; finished top-five scores; real same-browser peers and the current runner; no seeded competitors. |
-| `src/App.tsx`, `.finish-cover` | Exact final score, distance/combo explanation, save status, copy score, replay, and home. |
+| `src/App.tsx`, `.finish-cover` | Big number = the frozen meter (`meters(result.distance)` m), then “N× final combo = S pts”, save status, copy score, replay, and home. Board rows and peers show scores in pts. |
 
 ## Motion and audio
 

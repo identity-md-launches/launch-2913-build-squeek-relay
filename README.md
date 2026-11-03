@@ -33,7 +33,7 @@ Open the preview address printed by Vite. Serve the site over HTTP(S); opening `
 - Sleep makes the track icy. Avoid ice patches and sleeping runners, which reset the combo. The first baton is close enough to collect within a few seconds even at the sleeping crawl.
 - **P / Escape** pauses or resumes. The real heat clock continues; leaving the tab or opening help pauses gameplay too. Sound can be muted in the header or in help on mobile.
 
-The score is `floor(game distance × final combo)`, labeled **meters ridden with Squeektoshi**. It is an arcade score, with no token or monetary reward. A normal heat ends at the current round boundary. If verified timing is unavailable, the lifecycle is unsuitable, or fewer than 12 seconds remain, it uses a 90-second heat. The title also offers an explicit 90-second quick heat.
+The big race meter is **meters ridden**, `floor(distance)`. The “N m distance” chip and the end card’s big number use the same `meters()` function on the same game state, so they always match, including after a pause or an outage freeze. The score is `floor(distance × final combo)` and is always labelled in **points (pts)**, never as meters. It is an arcade score, with no token or monetary reward. A normal heat ends at the current round boundary. If verified timing is unavailable, the lifecycle is unsuitable, or fewer than 12 seconds remain, it uses a 90-second heat. The title also offers an explicit 90-second quick heat.
 
 ## Live Squeekchain data
 
@@ -45,9 +45,19 @@ The app reads these public APIs directly from the browser:
 | [GET /v1/economy/state](https://api.squeekchain.com/v1/economy/state) | `lifecycle.currentRound`, `stage`, and `paused`. Supplies the displayed round and gates scoring during a lifecycle pause. |
 | [GET /v1/core](https://api.squeekchain.com/v1/core) | `configuration.genesisTimestamp` and `roundDuration`, fetched initially and on manual reconnect. Used with the economy round to derive its real end time. No guessed genesis timestamp is embedded. |
 
-The two required feeds poll every **2.5 seconds**, without overlapping requests. Requests time out after 4.5 seconds. Either required feed failing or becoming invalid pauses distance, scoring, and recharge; the site shows a reconnect state and retries automatically. An eight-second receipt watchdog also freezes scoring. Stale measurements produce blue frost and pause scoring. A fresh, sleeping motor permits only a 0.6 m/s crawl, cancels boost, and cannot recharge it. This deliberately distinguishes genuine sleep from missing data.
+`/v1/status` and `/v1/economy/state` are polled **directly** from `https://api.squeekchain.com` (CORS `*`) every **2.5 seconds**, each on its own loop so a slow round feed never delays the wheel. Every attempt is aborted after **3 seconds** and immediately retried on a second direct route that bypasses the HTTP cache (`cache: "no-store"`; the API rejects unknown query parameters, so no cache-buster is added). No third-party proxy is used, and the app registers no service worker.
+
+The round feed often answers **HTTP 200 with `{"status":"unavailable","reason":"indexer_unavailable"}`** while its indexer catches up (seen repeatedly on 2026-11-03). That is a reachable API, not an outage: the last real round stays on screen marked “last seen” and the HUD stays LIVE. The earlier build treated it as a failure, which is why QA saw RECONNECTING while the API was healthy. The browser’s `navigator.onLine` flag is not trusted either (headless Chromium reports `false` while requests succeed): the `offline`/`online` events only trigger an immediate re-poll, and the real answers decide.
+
+A real failure (network error, non-2xx, unparseable wheel data, a status reading older than 7 seconds, or two missed round polls in a row) shows **OFFLINE / RECONNECTING**: scoring, recharge and the distance meter freeze, RPM shows “—”, and work units are marked “last seen”. Nothing is estimated. The next real reading resumes the race from live values. Before the first reading the badge reads **SYNC / CONNECTING**, which on a healthy API lasts well under a second. Freshness is judged on the server’s `generatedAt` clock, so a device with the wrong time is not shown stale. Stale measurements produce blue frost and pause scoring. A fresh, sleeping motor permits only a 0.6 m/s crawl, cancels boost, and cannot recharge it. This deliberately distinguishes genuine sleep from missing data.
 
 Work units are displayed from the measured integer string using `BigInt`; they change only when the API reports a new total. They are never interpolated. No fabricated chain data, offline simulation, or runtime demo switch is shipped. The in-game **How it works** dialog names the APIs and explains the rules. See the primary [API documentation](https://docs.squeekchain.com/developers/api/) and [round definition](https://docs.squeekchain.com/system/rounds-and-blocks/).
+
+## Hosting and gateway fallback
+
+The plane publishes `dist/` under **squeek-relay-one-hamster-all-of.identitymd.eth**. The title screen has a “Page slow to load?” line linking public gateways for the **live CID**. The CID is found at runtime: from a `<cid>.ipfs.` host or `/ipfs/<cid>/` path, otherwise from the gateway’s `X-Ipfs-Path`/`X-Ipfs-Roots` headers (eth.limo sends them), otherwise from ENS DNSLink through `https://dns.eth.limo/dns-query`. The links then point to `https://<cid>.ipfs.dweb.link/` and `https://<cid>.ipfs.inbrowser.link/`. Until the CID is known they use the ENS-name form (`squeek--relay--one--hamster--all--of-identitymd-eth.ipns.dweb.link`).
+
+**eth.limo TLS (QA item 1):** this job cannot fix it in the site’s files. On 2026-11-03 `https://squeek-relay-one-hamster-all-of.identitymd.eth.limo/` failed the TLS handshake with a server-side `tlsv1 alert internal error`, before any content was served. A made-up label under `identitymd.eth.limo` fails the same way, while `identitymd.eth.limo` itself and other names complete TLS, and ENS DNSLink for this name resolves correctly through eth.limo’s own DoH (`dnslink=/ipfs/bafybeid244duorixf5mo3xu3g57pqfkiskukkoozprvcbcn7gneyqvyq3a`). So eth.limo is not issuing a certificate for this second-level `*.identitymd.eth.limo` name; the site’s bytes are not the cause. The fix needs the publishing plane or eth.limo (certificate issuance for the name), or a shorter top-level label. Until then, the gateway links above reach the same CID.
 
 ## Multiplayer and identity
 
@@ -57,18 +67,19 @@ Wallet identity is optional. One sheet offers named EIP-6963 extensions, Coinbas
 
 ## Validation
 
-Actual worker results are recorded in **[artifacts/validation.md](artifacts/validation.md)**, [interaction-results.json](artifacts/interaction-results.json), and [taste.json](artifacts/taste.json). The six-domain design review and fixes are included there. The implemented design is documented in **[DESIGN.md](DESIGN.md)**.
+This fix job’s results, the six-domain Better Interface review and its limitations are in **[VALIDATION.md](VALIDATION.md)**. The implemented design is documented in **[DESIGN.md](DESIGN.md)**.
 
-Final checks:
+Final checks for this fix (2026-11-03):
 
 | Check | Result |
 | --- | --- |
 | `npm run typecheck` | Passed |
-| `npm test` | 8 engine / API tests passed |
-| `npm run build` | Passed; static export present |
-| `npm run test:browser` | 22 checks passed, including Chromium and WebKit mobile play |
-| Pinned `taste.mjs --out test/scratch/taste` | 16/16 checks passed at 320, 390, and 1440 wide |
-| Axe WCAG A / AA scans | Zero detected violations in title, wallet, help, and race states |
+| Unit tests (`node --import tsx --test tests/*.test.ts`) | 12/12 passed (`npm test` uses the tsx CLI, which could not open its IPC pipe in this sandbox) |
+| `npm run build` | Passed; static export in `dist/` |
+| `tests/browser.mjs` (Chromium) | 21/22 passed. The live-network check failed only because this sandbox’s Chromium has no internet; the live run below covers it. WebKit was not installed here (recorded limitation). |
+| Live 62 s heat against real API answers | LIVE after 0.45 s and in 31 of 31 samples; RPM, work units and round matched the API; offline froze the meter at 38 m for 6 s; recovery in about 0.2 s |
+| Pinned `taste.mjs --out test/scratch/taste` | 16/16 checks passed at 320, 390 and 1440 wide |
+| Axe WCAG A / AA scans (in the browser suite) | Zero violations in title, wallet, help and race states |
 
 To reproduce browser validation with installed browser dependencies:
 
@@ -84,6 +95,6 @@ The provided browser connector failed to launch, so local Playwright supplied re
 
 ## Submission size and generated paths
 
-The explicit **`.gitignore` path budget is 512 bytes** (implemented file: 203 bytes). It excludes `node_modules/`, `.vite/`, `.cache/`, `*.tsbuildinfo` at every nesting level and disposable `test/scratch/`. It deliberately does **not** exclude `dist/`. No dependencies, browser downloads, package caches, registry archives, or submodules are part of the deliverable. A byte inventory is in [artifacts/bundle-budget.json](artifacts/bundle-budget.json); the complete deliverable is below the 8 MiB limit.
+The explicit **`.gitignore` path budget is 512 bytes** (implemented file: 203 bytes). It excludes `node_modules/`, `.vite/`, `.cache/`, `*.tsbuildinfo` at every nesting level and disposable `test/scratch/`. It deliberately does **not** exclude `dist/`. No dependencies, browser downloads, package caches, registry archives, or submodules are part of the deliverable. The complete deliverable is below the 8 MiB limit.
 
 Font and wallet-mark notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). All hamster, wheel, track, favicon, share-card artwork and synthesized SFX were implemented for this game.

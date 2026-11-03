@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   canScore,
   createGame,
+  meters,
   moveLane,
   score,
   step,
@@ -13,12 +14,22 @@ import {
 import {
   chooseHeat,
   formatTime,
+  economyGap,
   formatWork,
+  LIVE_WINDOW_MS,
   motorMode,
   parseEconomy,
   parseRoundConfig,
   parseStatus,
 } from "../src/lib/live.ts";
+import {
+  cidFromDnsJson,
+  cidFromHeaders,
+  cidFromLocation,
+  ENS_NAME,
+  inlineDnsLabel,
+  mirrorLinks,
+} from "../src/lib/gateway.ts";
 
 const running: Motor = { mode: "running", rpm: 25, paused: false };
 const sleeping: Motor = { mode: "sleeping", rpm: 0, paused: false };
@@ -48,7 +59,7 @@ test("converts live milli-RPM, retains large work totals and freshness", () => {
   );
   assert.equal(motorMode({ ...m, observedAt: at - 121000 }, true, at), "stale");
   assert.equal(motorMode({ ...m, freshness: "stale" }, true, at), "stale");
-  assert.equal(motorMode(m, true, at + 8001), "reconnecting");
+  assert.equal(motorMode(m, true, at + LIVE_WINDOW_MS + 1), "reconnecting");
   assert.equal(motorMode(m, false, at), "reconnecting");
   assert.throws(() =>
     parseStatus({ measurement: { ...fixture.measurement, rpmMilli: NaN } }, at),
@@ -198,4 +209,82 @@ test("a complete 90-second heat advances fairly and remains bounded", () => {
   assert.ok(g.charge <= 100);
   assert.ok(score(g) > 0);
   assert.ok(g.elapsed > 89.9);
+});
+
+test("server clock judges freshness, so device clock skew never fakes a stale or live feed", () => {
+  const skewed = at - 10 * 60_000; // device clock 10 minutes behind
+  const m = parseStatus(
+    { ...fixture, generatedAt: new Date(at + 5000).toISOString() },
+    skewed,
+  );
+  assert.equal(m.observedAt, skewed - 5000);
+  assert.equal(motorMode(m, true, skewed + 1000), "running");
+  const old = parseStatus(
+    { ...fixture, generatedAt: new Date(at + 130_000).toISOString() },
+    skewed,
+  );
+  assert.equal(motorMode(old, true, skewed), "stale");
+  // A reading counts as live for LIVE_WINDOW_MS after it arrived, then it is RECONNECTING.
+  assert.equal(motorMode(m, true, skewed + LIVE_WINDOW_MS), "running");
+  assert.equal(motorMode(m, true, skewed + LIVE_WINDOW_MS + 1), "reconnecting");
+});
+
+test("meter, distance chip and end card share one rounding; a paused heat keeps it frozen", () => {
+  const g = createGame();
+  advance(g, running, 3);
+  const frozen = meters(g.distance);
+  assert.ok(frozen > 0);
+  for (const m of [
+    { ...running, paused: true },
+    { ...running, mode: "reconnecting" as const },
+    { ...running, mode: "stale" as const },
+  ]) {
+    advance(g, m, 5);
+    assert.equal(meters(g.distance), frozen);
+    assert.equal(g.speed, 0);
+  }
+  assert.equal(meters(12.9999), 12);
+  assert.equal(meters(13), 13);
+  // Score is distance × combo, reported in points and never as the meter's meters.
+  assert.equal(score({ distance: 13.7, combo: 2 }), 27);
+});
+
+test("gateway helpers find the live CID and build public mirror links", () => {
+  const cid = "bafybeid244duorixf5mo3xu3g57pqfkiskukkoozprvcbcn7gneyqvyq3a";
+  assert.equal(cidFromLocation(`${cid}.ipfs.dweb.link`, "/"), cid);
+  assert.equal(cidFromLocation("example.com", `/ipfs/${cid}/index.html`), cid);
+  assert.equal(cidFromLocation(`${ENS_NAME}.limo`, "/"), null);
+  assert.equal(cidFromHeaders(`/ipfs/${cid}/`, null), cid);
+  assert.equal(cidFromHeaders(null, `${cid},bafyother`), cid);
+  assert.equal(cidFromHeaders(null, null), null);
+  assert.equal(
+    cidFromDnsJson({ Answer: [{ data: `dnslink=/ipfs/${cid}` }] }),
+    cid,
+  );
+  assert.equal(cidFromDnsJson({ Status: 3 }), null);
+  assert.deepEqual(
+    mirrorLinks(cid).map((m) => m.href),
+    [`https://${cid}.ipfs.dweb.link/`, `https://${cid}.ipfs.inbrowser.link/`],
+  );
+  assert.equal(
+    inlineDnsLabel(ENS_NAME),
+    "squeek--relay--one--hamster--all--of-identitymd-eth",
+  );
+  assert.match(mirrorLinks(null)[0].href, /\.ipns\.dweb\.link\/$/);
+});
+
+test("a 200 'indexer_unavailable' round answer is a data gap, not a lost connection", () => {
+  assert.equal(
+    economyGap({ status: "unavailable", reason: "indexer_unavailable" }),
+    "indexer_unavailable",
+  );
+  assert.equal(economyGap({ status: "unavailable" }), "unavailable");
+  assert.equal(
+    economyGap({
+      status: "available",
+      lifecycle: { stage: "active", paused: false, currentRound: "7" },
+    }),
+    null,
+  );
+  assert.throws(() => parseEconomy({ status: "unavailable" }));
 });

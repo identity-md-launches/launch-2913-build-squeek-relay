@@ -176,3 +176,7 @@ export function step(
   g.particles = g.particles.filter((p) => p.age < 0.65);
   return event;
 }
+/** Whole meters, the one rounding used by the meter, the distance chip and the end card. */
+export function meters(distance: number) {
+  return Math.floor(distance);
+}

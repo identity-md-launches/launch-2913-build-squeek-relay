@@ -94,6 +94,12 @@ async function shot(page, name) {
 async function fixture(context, state) {
   await context.route("https://api.squeekchain.com/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    // Routed requests bypass Playwright's offline emulation, so an offline
+    // client is modelled here as a dropped connection.
+    if (state.offline) {
+      await route.abort("internetdisconnected");
+      return;
+    }
     if (state.fail === "all" || state.fail === path) {
       await route.fulfill({
         status: 503,
@@ -358,9 +364,9 @@ try {
       await advance(page, 3000);
       await waitMode(page, "reconnecting");
       await advance(page, 100);
-      const before = await page.getByTestId("score").innerText();
+      const before = await page.getByTestId("meter").innerText();
       await advance(page, 3000);
-      assert.equal(await page.getByTestId("score").innerText(), before);
+      assert.equal(await page.getByTestId("meter").innerText(), before);
       assert.ok(
         await page
           .getByRole("button", { name: "Retry live connection" })
@@ -371,7 +377,7 @@ try {
       await page.getByRole("button", { name: "Retry live connection" }).click();
       await waitMode(page, "running");
       await advance(page, 2000);
-      assert.notEqual(await page.getByTestId("score").innerText(), before);
+      assert.notEqual(await page.getByTestId("meter").innerText(), before);
       return { frozenScore: before };
     },
   );
@@ -379,12 +385,13 @@ try {
     "Economy failure also pauses scoring; stale measurement is honest frost",
     async () => {
       state.fail = "/v1/economy/state";
-      await advance(page, 3000);
+      // One missed round poll is tolerated; the second in a row is an outage.
+      await advance(page, 6000);
       await waitMode(page, "reconnecting");
       await advance(page, 100);
-      const before = await page.getByTestId("score").innerText();
+      const before = await page.getByTestId("meter").innerText();
       await advance(page, 1000);
-      assert.equal(await page.getByTestId("score").innerText(), before);
+      assert.equal(await page.getByTestId("meter").innerText(), before);
       state.fail = undefined;
       state.stale = true;
       await advance(page, 3000);
@@ -403,9 +410,9 @@ try {
     await page.locator(".arcade").focus();
     await page.keyboard.press("p");
     await advance(page, 100);
-    const before = await page.getByTestId("score").innerText();
+    const before = await page.getByTestId("meter").innerText();
     await advance(page, 1000);
-    assert.equal(await page.getByTestId("score").innerText(), before);
+    assert.equal(await page.getByTestId("meter").innerText(), before);
     await page.locator(".pause-cover .primary").click();
     await page
       .getByRole("button", { name: "How to play", exact: true })
@@ -452,14 +459,72 @@ try {
     await peer.close();
   });
   await check(
+    "Client offline mid-heat freezes the meter, then resumes from live data",
+    async () => {
+      let frozen, chip;
+      state.offline = true;
+      await context.setOffline(true);
+      try {
+        await advance(page, 3000);
+        await waitMode(page, "reconnecting");
+        await advance(page, 100);
+        frozen = await page.getByTestId("meter").innerText();
+        chip = await page.getByTestId("distance").innerText();
+        assert.equal(chip, `${frozen.replace(/m$/, "")} m distance`);
+        assert.equal(
+          (await page.locator(".live-badge").innerText()).trim(),
+          "OFFLINE",
+        );
+        assert.ok(
+          (await page.locator(".rpm").innerText()).startsWith("—"),
+          "no RPM is invented while offline",
+        );
+        await advance(page, 5000);
+        assert.equal(await page.getByTestId("meter").innerText(), frozen);
+        assert.equal(await page.getByTestId("distance").innerText(), chip);
+        await shot(page, "offline-frozen");
+      } finally {
+        state.offline = false;
+        await context.setOffline(false);
+      }
+      await page.evaluate(() => window.dispatchEvent(new Event("online")));
+      await advance(page, 3000);
+      await waitMode(page, "running");
+      await advance(page, 2000);
+      assert.notEqual(await page.getByTestId("meter").innerText(), frozen);
+      return { frozen, chip };
+    },
+  );
+  await check(
     "Complete 90-second heat saves exact distance × final combo, replays and persists",
     async () => {
+      // Pause under the banner, let the heat clock run out, and require the
+      // end card to show exactly the frozen meter.
+      await page.locator(".arcade").focus();
+      await page.keyboard.press("p");
+      await advance(page, 200);
+      await page.locator(".pause-cover").waitFor();
+      const frozenMeter = await page.getByTestId("meter").innerText();
+      assert.equal(
+        await page.getByTestId("distance").innerText(),
+        `${frozenMeter.replace(/m$/, "")} m distance`,
+      );
       await advance(page, 95000);
       await page
         .getByRole("heading", { name: "Little legs. Big relay." })
         .waitFor({ timeout: 10000 });
       const resultScore = Number(
-        (await page.locator(".finish-score").innerText()).replace(/[^\d]/g, ""),
+        (await page.getByTestId("final-score").innerText()).replace(
+          /[^\d]/g,
+          "",
+        ),
+      );
+      const finalDistance = await page
+        .getByTestId("final-distance")
+        .innerText();
+      assert.equal(
+        finalDistance.replace(/\s/g, ""),
+        frozenMeter.replace(/\s/g, ""),
       );
       const saved = await page.evaluate(() =>
         JSON.parse(localStorage.getItem("squeek-relay:scores:v1")),
@@ -471,6 +536,10 @@ try {
         Math.floor(saved[0].distance * saved[0].combo),
       );
       assert.equal(saved[0].score, resultScore);
+      assert.equal(
+        `${Math.floor(saved[0].distance).toLocaleString("en-US")}m`,
+        finalDistance.replace(/\s/g, ""),
+      );
       await context.grantPermissions(["clipboard-read", "clipboard-write"]);
       await page
         .getByRole("button", { name: "Copy score", exact: true })
@@ -486,7 +555,7 @@ try {
       await shot(page, "heat-finished");
       await page.getByRole("button", { name: "Race again" }).click();
       assert.ok(await page.locator(".is-racing").isVisible());
-      assert.equal(await page.getByTestId("score").innerText(), "0m");
+      assert.equal(await page.getByTestId("meter").innerText(), "0m");
       await page.reload();
       await waitMode(page, "running");
       assert.equal(
@@ -505,6 +574,8 @@ try {
         score: resultScore,
         distance: saved[0].distance,
         combo: saved[0].combo,
+        frozenMeter,
+        finalDistance,
       };
     },
   );

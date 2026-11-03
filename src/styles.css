@@ -1627,3 +1627,25 @@ kbd {
     padding: 4px 8px;
   }
 }
+
+/* Score line under the distance meter, and public-gateway mirrors on the title. */
+.race-score > span b {
+  color: var(--text);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.mirror-note {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  margin-block-start: 8px;
+}
+.mirror-note a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  display: inline-block;
+  padding-block: 4px;
+}
+.mirror-note a:hover {
+  color: var(--text);
+}
